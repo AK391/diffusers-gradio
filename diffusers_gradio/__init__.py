@@ -388,14 +388,7 @@ def registry(name: str = None, model_path: str = None, **kwargs):
     
     return interface
 
-# Example model loader function
-def load_omini_control():
-    # Load the OminiControl model here
-    return FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16)
-
-# Register the model
-register_model('Yuanshi/OminiControl', load_omini_control)
-
+# Example usage of the registry function
 if __name__ == "__main__":
-    init_pipeline()
-    demo.launch(debug=True, ssr_mode=False)
+    interface = registry(name='Yuanshi/OminiControl')  # Specify your model name or path
+    interface.launch(debug=True, ssr_mode=False)
