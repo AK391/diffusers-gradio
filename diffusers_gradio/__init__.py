@@ -11,6 +11,10 @@ from io import BytesIO
 from diffusers.pipelines import FluxPipeline
 from diffusers.models.attention_processor import Attention, F
 from peft.tuners.tuners_utils import BaseTunerLayer
+import subprocess
+from huggingface_hub import hf_hub_download, list_repo_files
+from diffusers import DiffusionPipeline
+from threading import Thread
 
 __version__ = "0.0.1"
 
@@ -303,6 +307,96 @@ demo = gr.ChatInterface(
     title="OminiControl / Subject driven generation",
     examples=["hello", "hola", "merhaba"],  # Example inputs
 )
+
+# Define a simple registry
+registry = {}
+
+def register_model(name: str, model_loader: Callable):
+    """Register a model in the registry."""
+    registry[name] = model_loader
+
+def get_model_path(name: str, model_path: str = None) -> str:
+    """Retrieve the model path based on the name or provided path."""
+    # Implement logic to get the model path
+    return model_path or f"models/{name}"
+
+def get_fn(model_path: str, **model_kwargs):
+    """Create a chat function with the specified model."""
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Load the diffusion model
+    model = DiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.bfloat16).to(device)
+
+    def predict(
+        message: str,
+        history,
+        system_prompt: str,
+        temperature: float,
+        max_new_tokens: int,
+        top_k: int,
+        repetition_penalty: float,
+        top_p: float
+    ):
+        try:
+            # Handle input format
+            if isinstance(message, dict):
+                text = message.get("text", "")
+                files = message.get("files", [])
+                
+                # Process images
+                images = [Image.open(file).convert("RGB") for file in files] if files else []
+            else:
+                text = message
+                images = []
+
+            # Input validation
+            if text == "" and not images:
+                raise gr.Error("Please input a query and optionally image(s).")
+
+            # Generate output using the diffusion model
+            result_img = model(prompt=text, images=images, num_inference_steps=8).images[0]
+
+            return result_img
+
+        except Exception as e:
+            print(f"Error during generation: {str(e)}")
+            yield f"An error occurred: {str(e)}"
+
+    return predict
+
+def registry(name: str = None, model_path: str = None, **kwargs):
+    """Create a Gradio Interface with similar styling and parameters."""
+    
+    model_path = get_model_path(name, model_path)
+    fn = get_fn(model_path, **kwargs)
+
+    interface = gr.ChatInterface(
+        fn=fn,
+        multimodal=True,  # Enable multimodal input
+        additional_inputs_accordion=gr.Accordion("⚙️ Parameters", open=False),
+        additional_inputs=[
+            gr.Textbox(
+                "You are a helpful AI assistant.",
+                label="System prompt"
+            ),
+            gr.Slider(0, 1, 0.7, label="Temperature"),
+            gr.Slider(128, 4096, 1024, label="Max new tokens"),
+            gr.Slider(1, 80, 40, label="Top K sampling"),
+            gr.Slider(0, 2, 1.1, label="Repetition penalty"),
+            gr.Slider(0, 1, 0.95, label="Top P sampling"),
+        ],
+    )
+    
+    return interface
+
+# Example model loader function
+def load_omini_control():
+    # Load the OminiControl model here
+    return FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16)
+
+# Register the model
+register_model('Yuanshi/OminiControl', load_omini_control)
 
 if __name__ == "__main__":
     init_pipeline()
