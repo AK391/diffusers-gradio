@@ -315,10 +315,12 @@ def register_model(name: str, model_loader: Callable):
 
 def get_model_path(name: str, model_path: str = None) -> str:
     """Retrieve the model path based on the name or provided path."""
-    # Implement logic to get the model path
-    return model_path or f"models/{name}"
+    # Ensure the model path is valid
+    if model_path is None:
+        return name  # Return the name directly if no model_path is provided
+    return model_path
 
-def get_fn(model_path: str, **model_kwargs):
+def get_fn(model_path: str, model_name: str, **model_kwargs):
     """Create a chat function with the specified model."""
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -366,8 +368,8 @@ def get_fn(model_path: str, **model_kwargs):
 def registry(name: str = None, model_path: str = None, **kwargs):
     """Create a Gradio Interface with similar styling and parameters."""
     
-    model_path = get_model_path(name, model_path)
-    fn = get_fn(model_path, **kwargs)
+    model_path = get_model_path(name, model_path)  # Use the model name directly if no path is provided
+    fn = get_fn(model_path, name, **kwargs)  # Pass the model name to get_fn
 
     interface = gr.ChatInterface(
         fn=fn,
