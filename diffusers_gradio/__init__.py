@@ -4,28 +4,13 @@ import gradio as gr
 import torch
 import yaml
 import numpy as np
-from typing import Optional, Union, List, Tuple, Dict, Any, Callable, Type
-from diffusers.pipelines import FluxPipeline
+import cv2
+from typing import Optional, Union, List, Tuple, Dict, Any, Callable
 from PIL import Image, ImageFilter
 from io import BytesIO
-from diffusers.models.transformers.transformer_flux import (
-    FluxTransformer2DModel,
-    Transformer2DModelOutput,
-    USE_PEFT_BACKEND,
-    is_torch_version,
-    scale_lora_layers,
-    unscale_lora_layers,
-    logger,
-)
-from peft.tuners.tuners_utils import BaseTunerLayer
+from diffusers.pipelines import FluxPipeline
 from diffusers.models.attention_processor import Attention, F
-from .lora_controller import enable_lora
-
-from diffusers.pipelines.flux.pipeline_flux import (
-    FluxPipelineOutput,
-    calculate_shift,
-    retrieve_timesteps,
-)
+from peft.tuners.tuners_utils import BaseTunerLayer
 
 __version__ = "0.0.1"
 
@@ -39,32 +24,16 @@ condition_dict = {
 }
 
 class Condition(object):
-    def __init__(
-        self,
-        condition_type: str,
-        raw_img: Union[Image.Image, torch.Tensor] = None,
-        condition: Union[Image.Image, torch.Tensor] = None,
-        mask=None,
-    ) -> None:
+    def __init__(self, condition_type: str, raw_img: Union[Image.Image, torch.Tensor] = None):
         self.condition_type = condition_type
-        assert raw_img is not None or condition is not None
-        if raw_img is not None:
-            self.condition = self.get_condition(condition_type, raw_img)
-        else:
-            self.condition = condition
-        assert mask is None, "Mask not supported yet"
+        assert raw_img is not None
+        self.condition = self.get_condition(condition_type, raw_img)
 
-    def get_condition(
-        self, condition_type: str, raw_img: Union[Image.Image, torch.Tensor]
-    ) -> Union[Image.Image, torch.Tensor]:
+    def get_condition(self, condition_type: str, raw_img: Union[Image.Image, torch.Tensor]) -> Union[Image.Image, torch.Tensor]:
         """Returns the condition image."""
         if condition_type == "depth":
             from transformers import pipeline
-            depth_pipe = pipeline(
-                task="depth-estimation",
-                model="LiheYoung/depth-anything-small-hf",
-                device="cuda",
-            )
+            depth_pipe = pipeline(task="depth-estimation", model="LiheYoung/depth-anything-small-hf", device="cuda")
             source_image = raw_img.convert("RGB")
             condition_img = depth_pipe(source_image)["depth"].convert("RGB")
             return condition_img
@@ -78,11 +47,10 @@ class Condition(object):
         elif condition_type == "coloring":
             return raw_img.convert("L").convert("RGB")
         elif condition_type == "deblurring":
-            condition_image = raw_img.convert("RGB").filter(ImageFilter.GaussianBlur(10)).convert("RGB")
-            return condition_image
+            return raw_img.convert("RGB").filter(ImageFilter.GaussianBlur(10)).convert("RGB")
         elif condition_type == "fill":
             return raw_img.convert("RGB")
-        return self.condition
+        return raw_img
 
     @property
     def type_id(self) -> int:
@@ -94,157 +62,7 @@ class Condition(object):
         """Returns the type id of the condition."""
         return condition_dict[condition_type]
 
-    def _encode_image(self, pipe: FluxPipeline, cond_img: Image.Image) -> torch.Tensor:
-        """Encodes an image condition into tokens using the pipeline."""
-        cond_img = pipe.image_processor.preprocess(cond_img)
-        cond_img = cond_img.to(pipe.device).to(pipe.dtype)
-        cond_img = pipe.vae.encode(cond_img).latent_dist.sample()
-        cond_img = (cond_img - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
-        cond_tokens = pipe._pack_latents(cond_img, *cond_img.shape)
-        cond_ids = pipe._prepare_latent_image_ids(
-            cond_img.shape[0],
-            cond_img.shape[2],
-            cond_img.shape[3],
-            pipe.device,
-            pipe.dtype,
-        )
-        return cond_tokens, cond_ids
-
-    def encode(self, pipe: FluxPipeline) -> Tuple[torch.Tensor, torch.Tensor, int]:
-        """Encodes the condition into tokens, ids and type_id."""
-        if self.condition_type in ["depth", "canny", "subject", "coloring", "deblurring", "fill"]:
-            tokens, ids = self._encode_image(pipe, self.condition)
-        else:
-            raise NotImplementedError(f"Condition type {self.condition_type} not implemented")
-        type_id = torch.ones_like(ids[:, :1]) * self.type_id
-        return tokens, ids, type_id
-
-def prepare_params(
-    hidden_states: torch.Tensor,
-    encoder_hidden_states: torch.Tensor = None,
-    pooled_projections: torch.Tensor = None,
-    timestep: torch.LongTensor = None,
-    img_ids: torch.Tensor = None,
-    txt_ids: torch.Tensor = None,
-    guidance: torch.Tensor = None,
-    joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-    controlnet_block_samples=None,
-    controlnet_single_block_samples=None,
-    return_dict: bool = True,
-    **kwargs: dict,
-):
-    return (
-        hidden_states,
-        encoder_hidden_states,
-        pooled_projections,
-        timestep,
-        img_ids,
-        txt_ids,
-        guidance,
-        joint_attention_kwargs,
-        controlnet_block_samples,
-        controlnet_single_block_samples,
-        return_dict,
-    )
-
-def seed_everything(seed: int = 42):
-    torch.backends.cudnn.deterministic = True
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
-@torch.no_grad()
-def generate(
-    pipeline: FluxPipeline,
-    conditions: List[Condition] = None,
-    model_config: Optional[Dict[str, Any]] = {},
-    condition_scale: float = 1.0,
-    **params: dict,
-):
-    # ... paste the entire generate function here ...
-
-def tranformer_forward(
-    transformer: FluxTransformer2DModel,
-    condition_latents: torch.Tensor,
-    condition_ids: torch.Tensor,
-    condition_type_ids: torch.Tensor,
-    model_config: Optional[Dict[str, Any]] = {},
-    return_conditional_latents: bool = False,
-    c_t=0,
-    **params: dict,
-):
-    # ... paste the entire transformer_forward function here ...
-
-class enable_lora:
-    def __init__(self, lora_modules: List[BaseTunerLayer], activated: bool) -> None:
-        self.activated: bool = activated
-        if activated:
-            return
-        self.lora_modules: List[BaseTunerLayer] = [
-            each for each in lora_modules if isinstance(each, BaseTunerLayer)
-        ]
-        self.scales = [
-            {
-                active_adapter: lora_module.scaling[active_adapter]
-                for active_adapter in lora_module.active_adapters
-            }
-            for lora_module in self.lora_modules
-        ]
-
-    def __enter__(self) -> None:
-        if self.activated:
-            return
-
-        for lora_module in self.lora_modules:
-            if not isinstance(lora_module, BaseTunerLayer):
-                continue
-            lora_module.scale_layer(0)
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[Any],
-    ) -> None:
-        if self.activated:
-            return
-        for i, lora_module in enumerate(self.lora_modules):
-            if not isinstance(lora_module, BaseTunerLayer):
-                continue
-            for active_adapter in lora_module.active_adapters:
-                lora_module.scaling[active_adapter] = self.scales[i][active_adapter]
-
-class set_lora_scale:
-    def __init__(self, lora_modules: List[BaseTunerLayer], scale: float) -> None:
-        self.lora_modules: List[BaseTunerLayer] = [
-            each for each in lora_modules if isinstance(each, BaseTunerLayer)
-        ]
-        self.scales = [
-            {
-                active_adapter: lora_module.scaling[active_adapter]
-                for active_adapter in lora_module.active_adapters
-            }
-            for lora_module in self.lora_modules
-        ]
-        self.scale = scale
-
-    def __enter__(self) -> None:
-        for lora_module in self.lora_modules:
-            if not isinstance(lora_module, BaseTunerLayer):
-                continue
-            lora_module.scale_layer(self.scale)
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[Any],
-    ) -> None:
-        for i, lora_module in enumerate(self.lora_modules):
-            if not isinstance(lora_module, BaseTunerLayer):
-                continue
-            for active_adapter in lora_module.active_adapters:
-                lora_module.scaling[active_adapter] = self.scales[i][active_adapter]
-
+# Attention forward function
 def attn_forward(
     attn: Attention,
     hidden_states: torch.FloatTensor,
@@ -255,8 +73,95 @@ def attn_forward(
     cond_rotary_emb: Optional[torch.Tensor] = None,
     model_config: Optional[Dict[str, Any]] = {},
 ) -> torch.FloatTensor:
-    # ... paste the entire attn_forward function here ...
+    batch_size, _, _ = (
+        hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+    )
 
+    with enable_lora((attn.to_q, attn.to_k, attn.to_v), model_config.get("latent_lora", False)):
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(hidden_states)
+        value = attn.to_v(hidden_states)
+
+    inner_dim = key.shape[-1]
+    head_dim = inner_dim // attn.heads
+
+    query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+    key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+    value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+    if attn.norm_q is not None:
+        query = attn.norm_q(query)
+    if attn.norm_k is not None:
+        key = attn.norm_k(key)
+
+    if encoder_hidden_states is not None:
+        encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
+        encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
+        encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
+
+        encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
+            batch_size, -1, attn.heads, head_dim
+        ).transpose(1, 2)
+        encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
+            batch_size, -1, attn.heads, head_dim
+        ).transpose(1, 2)
+        encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
+            batch_size, -1, attn.heads, head_dim
+        ).transpose(1, 2)
+
+        if attn.norm_added_q is not None:
+            encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
+        if attn.norm_added_k is not None:
+            encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
+
+        query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
+        key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
+        value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
+
+    if image_rotary_emb is not None:
+        from diffusers.models.embeddings import apply_rotary_emb
+        query = apply_rotary_emb(query, image_rotary_emb)
+        key = apply_rotary_emb(key, image_rotary_emb)
+
+    if condition_latents is not None:
+        cond_query = attn.to_q(condition_latents)
+        cond_key = attn.to_k(condition_latents)
+        cond_value = attn.to_v(condition_latents)
+
+        cond_query = cond_query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        cond_key = cond_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        cond_value = cond_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+        if attn.norm_q is not None:
+            cond_query = attn.norm_q(cond_query)
+        if attn.norm_k is not None:
+            cond_key = attn.norm_k(cond_key)
+
+    if cond_rotary_emb is not None:
+        cond_query = apply_rotary_emb(cond_query, cond_rotary_emb)
+        cond_key = apply_rotary_emb(cond_key, cond_rotary_emb)
+
+    if condition_latents is not None:
+        query = torch.cat([query, cond_query], dim=2)
+        key = torch.cat([key, cond_key], dim=2)
+        value = torch.cat([value, cond_value], dim=2)
+
+    # Attention mask handling
+    if not model_config.get("union_cond_attn", True):
+        attention_mask = torch.ones(query.shape[2], key.shape[2], device=query.device, dtype=torch.bool)
+        condition_n = cond_query.shape[2]
+        attention_mask[-condition_n:, :-condition_n] = False
+        attention_mask[:-condition_n, -condition_n:] = False
+
+    hidden_states = F.scaled_dot_product_attention(
+        query, key, value, dropout_p=0.0, is_causal=False, attn_mask=attention_mask
+    )
+    hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+    hidden_states = hidden_states.to(query.dtype)
+
+    return hidden_states
+
+# Block forward function
 def block_forward(
     self,
     hidden_states: torch.FloatTensor,
@@ -264,166 +169,164 @@ def block_forward(
     condition_latents: torch.FloatTensor,
     temb: torch.FloatTensor,
     cond_temb: torch.FloatTensor,
-    cond_rotary_emb=None,
-    image_rotary_emb=None,
     model_config: Optional[Dict[str, Any]] = {},
 ):
-    # ... paste the entire block_forward function here ...
+    use_cond = condition_latents is not None
+    with enable_lora((self.norm1.linear,), model_config.get("latent_lora", False)):
+        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
+    norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(encoder_hidden_states, emb=temb)
+
+    if use_cond:
+        norm_condition_latents, cond_gate_msa, cond_shift_mlp, cond_scale_mlp, cond_gate_mlp = self.norm1(condition_latents, emb=cond_temb)
+
+    # Attention
+    result = attn_forward(
+        self.attn,
+        hidden_states=norm_hidden_states,
+        encoder_hidden_states=norm_encoder_hidden_states,
+        condition_latents=norm_condition_latents if use_cond else None,
+    )
+    attn_output, context_attn_output = result[:2]
+    cond_attn_output = result[2] if use_cond else None
+
+    # Process attention outputs
+    attn_output = gate_msa.unsqueeze(1) * attn_output
+    hidden_states = hidden_states + attn_output
+    context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
+    encoder_hidden_states = encoder_hidden_states + context_attn_output
+
+    if use_cond:
+        cond_attn_output = cond_gate_msa.unsqueeze(1) * cond_attn_output
+        condition_latents = condition_latents + cond_attn_output
+
+    # LayerNorm + MLP
+    norm_hidden_states = self.norm2(hidden_states)
+    norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+    norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
+    norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+
+    if use_cond:
+        norm_condition_latents = self.norm2(condition_latents)
+        norm_condition_latents = norm_condition_latents * (1 + cond_scale_mlp[:, None]) + cond_shift_mlp[:, None]
+
+    # Feed-forward
+    with enable_lora((self.ff.net[2],), model_config.get("latent_lora", False)):
+        ff_output = self.ff(norm_hidden_states)
+        ff_output = gate_mlp.unsqueeze(1) * ff_output
+
+    hidden_states = hidden_states + ff_output
+    encoder_hidden_states = encoder_hidden_states + context_ff_output
+
+    if use_cond:
+        condition_latents = condition_latents + cond_ff_output
+
+    return encoder_hidden_states, hidden_states, condition_latents if use_cond else None
+
+# Single block forward function
 def single_block_forward(
     self,
     hidden_states: torch.FloatTensor,
     temb: torch.FloatTensor,
-    image_rotary_emb=None,
     condition_latents: torch.FloatTensor = None,
     cond_temb: torch.FloatTensor = None,
-    cond_rotary_emb=None,
     model_config: Optional[Dict[str, Any]] = {},
 ):
-    # ... paste the entire single_block_forward function here ...
+    using_cond = condition_latents is not None
+    residual = hidden_states
+    with enable_lora((self.norm.linear, self.proj_mlp), model_config.get("latent_lora", False)):
+        norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
+        mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
 
-def get_fn(model_path: str, **model_kwargs):
-    """Create a generation function with the specified model."""
-    pipe = FluxPipeline.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto"
+    if using_cond:
+        residual_cond = condition_latents
+        norm_condition_latents, cond_gate = self.norm(condition_latents, emb=cond_temb)
+        mlp_cond_hidden_states = self.act_mlp(self.proj_mlp(norm_condition_latents))
+
+    attn_output = attn_forward(
+        self.attn,
+        hidden_states=norm_hidden_states,
+        condition_latents=norm_condition_latents if using_cond else None,
     )
-    
-    if model_kwargs.get("lora_weights"):
-        pipe.load_lora_weights(
-            model_kwargs["lora_weights"],
-            weight_name=model_kwargs.get("weight_name"),
-            adapter_name=model_kwargs.get("adapter_name")
-        )
-        
-        # Configure attention processing
-        pipe.transformer.set_attn_processor(
-            lambda attn, *args, **kwargs: attn_forward(
-                attn,
-                *args,
-                model_config=model_kwargs.get("model_config", {}),
-                **kwargs
-            )
-        )
-        
-        # Configure block processing
-        for block in pipe.transformer.transformer_blocks:
-            block.forward = lambda *args, **kwargs: block_forward(
-                block,
-                *args,
-                model_config=model_kwargs.get("model_config", {}),
-                **kwargs
-            )
-        
-        for block in pipe.transformer.single_transformer_blocks:
-            block.forward = lambda *args, **kwargs: single_block_forward(
-                block,
-                *args,
-                model_config=model_kwargs.get("model_config", {}),
-                **kwargs
-            )
-    
-    def predict(
-        message: str,
-        history,
-        system_prompt: str,
-        condition_type: str,
-        temperature: float,
-        max_new_tokens: int,
-        top_k: int,
-        repetition_penalty: float,
-        top_p: float,
-        lora_scale: float = 1.0,
-    ):
-        try:
-            if isinstance(message, dict) and message.get("files"):
-                image = Image.open(message["files"][0]).convert("RGB")
-                text = message.get("text", "")
-                
-                # Process image (center crop and resize)
-                w, h, min_size = image.size[0], image.size[1], min(image.size)
-                image = image.crop((
-                    (w - min_size) // 2,
-                    (h - min_size) // 2,
-                    (w + min_size) // 2,
-                    (h + min_size) // 2,
-                ))
-                image = image.resize((512, 512))
-                
-                # Create condition and generate with LoRA control
-                condition = Condition(condition_type, image)
-                seed_everything(42)  # For reproducibility
-                
-                with set_lora_scale([pipe.transformer], lora_scale):
-                    result = generate(
-                        pipe,
-                        prompt=text.strip(),
-                        conditions=[condition],
-                        num_inference_steps=8,
-                        height=512,
-                        width=512,
-                        guidance_scale=7.5,
-                        condition_scale=1.0,
-                        model_config=model_kwargs.get("model_config", {}),
-                    ).images[0]
-                
-                # Convert to base64 for display
-                buffered = BytesIO()
-                result.save(buffered, format="PNG")
-                img_str = base64.b64encode(buffered.getvalue()).decode()
-                yield f"![Generated Image](data:image/png;base64,{img_str})"
-            else:
-                yield "Please provide both an image and text prompt."
-                
-        except Exception as e:
-            print(f"Error during generation: {str(e)}")
-            yield f"An error occurred: {str(e)}"
-            
-    return predict
 
-def get_model_path(name: str = None, model_path: str = None) -> str:
-    """Get the local path to the model."""
-    if model_path:
-        return model_path
-    
-    if name:
-        if "/" in name:
-            return name
-        else:
-            model_mapping = {
-                "flux": "black-forest-labs/FLUX.1-schnell",
-            }
-            if name not in model_mapping:
-                raise ValueError(f"Unknown model name: {name}")
-            return model_mapping[name]
-    
-    raise ValueError("Either name or model_path must be provided")
+    if using_cond:
+        attn_output, cond_attn_output = attn_output
 
-def registry(name: str = None, model_path: str = None, **kwargs):
-    """Create a Gradio Interface for image generation."""
-    model_path = get_model_path(name, model_path)
-    fn = get_fn(model_path, **kwargs)
+    with enable_lora((self.proj_out,), model_config.get("latent_lora", False)):
+        hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
+        gate = gate.unsqueeze(1)
+        hidden_states = gate * self.proj_out(hidden_states) + residual
 
-    return gr.ChatInterface(
-        fn=fn,
-        multimodal=True,
-        additional_inputs_accordion=gr.Accordion("⚙️ Parameters", open=False),
-        additional_inputs=[
-            gr.Textbox(
-                "You are a helpful AI assistant.",
-                label="System prompt"
-            ),
-            gr.Dropdown(
-                choices=list(condition_dict.keys()),
-                value="subject",
-                label="Condition Type"
-            ),
-            gr.Slider(0, 1, 0.7, label="Temperature"),
-            gr.Slider(128, 4096, 1024, label="Max new tokens"),
-            gr.Slider(1, 80, 40, label="Top K sampling"),
-            gr.Slider(0, 2, 1.1, label="Repetition penalty"),
-            gr.Slider(0, 1, 0.95, label="Top P sampling"),
-            gr.Slider(0, 2, 1.0, label="LoRA scale"),
-        ],
-    )
+    if using_cond:
+        condition_latents = torch.cat([cond_attn_output, mlp_cond_hidden_states], dim=2)
+        cond_gate = cond_gate.unsqueeze(1)
+        condition_latents = cond_gate * self.proj_out(condition_latents) + residual_cond
+
+    return hidden_states if not using_cond else (hidden_states, condition_latents)
+
+# Initialize the pipeline
+def init_pipeline():
+    global pipe
+    pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16)
+    pipe = pipe.to("cuda")
+    pipe.load_lora_weights("Yuanshi/OminiControl", weight_name="omini/subject_512.safetensors", adapter_name="subject")
+
+# Process image and text
+def process_image_and_text(image, text):
+    # Center crop image
+    w, h, min_size = image.size[0], image.size[1], min(image.size)
+    image = image.crop(((w - min_size) // 2, (h - min_size) // 2, (w + min_size) // 2, (h + min_size) // 2))
+    image = image.resize((512, 512))
+
+    condition = Condition("subject", image)
+
+    if pipe is None:
+        init_pipeline()
+
+    result_img = generate(
+        pipe,
+        prompt=text.strip(),
+        conditions=[condition],
+        num_inference_steps=8,
+        height=512,
+        width=512,
+    ).images[0]
+
+    return result_img
+
+# Gradio interface
+def get_samples():
+    sample_list = [
+        {
+            "image": "assets/oranges.jpg",
+            "text": "A very close up view of this item. It is placed on a wooden table. The background is a dark room, the TV is on, and the screen is showing a cooking show. With text on the screen that reads 'Omini Control!'",
+        },
+        {
+            "image": "assets/penguin.jpg",
+            "text": "On Christmas evening, on a crowded sidewalk, this item sits on the road, covered in snow and wearing a Christmas hat, holding a sign that reads 'Omini Control!'",
+        },
+        {
+            "image": "assets/rc_car.jpg",
+            "text": "A film style shot. On the moon, this item drives across the moon surface. The background is that Earth looms large in the foreground.",
+        },
+        {
+            "image": "assets/clock.jpg",
+            "text": "In a Bauhaus style room, this item is placed on a shiny glass table, with a vase of flowers next to it. In the afternoon sun, the shadows of the blinds are cast on the wall.",
+        },
+    ]
+    return [[Image.open(sample["image"]), sample["text"]] for sample in sample_list]
+
+demo = gr.Interface(
+    fn=process_image_and_text,
+    inputs=[
+        gr.Image(type="pil"),
+        gr.Textbox(lines=2),
+    ],
+    outputs=gr.Image(type="pil"),
+    title="OminiControl / Subject driven generation",
+    examples=get_samples(),
+)
+
+if __name__ == "__main__":
+    init_pipeline()
+    demo.launch(debug=True, ssr_mode=False)
