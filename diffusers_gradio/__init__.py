@@ -296,14 +296,12 @@ def process_image_and_text(image, text):
 
 # Gradio interface
 
-demo = gr.Interface(
-    fn=process_image_and_text,
-    inputs=[
-        gr.Image(type="pil"),
-        gr.Textbox(lines=2),
-    ],
-    outputs=gr.Image(type="pil"),
+demo = gr.ChatInterface(
+    fn=process_image_and_text,  # Function to handle chat responses
+    type="messages",             # Message type
+    multimodal=True,             # Enable multimodal input
     title="OminiControl / Subject driven generation",
+    examples=["hello", "hola", "merhaba"],  # Example inputs
 )
 
 if __name__ == "__main__":
