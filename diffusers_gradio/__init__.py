@@ -308,8 +308,6 @@ demo = gr.ChatInterface(
     examples=["hello", "hola", "merhaba"],  # Example inputs
 )
 
-# Define a simple registry
-registry = {}
 
 def register_model(name: str, model_loader: Callable):
     """Register a model in the registry."""
