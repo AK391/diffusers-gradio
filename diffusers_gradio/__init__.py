@@ -295,26 +295,6 @@ def process_image_and_text(image, text):
     return result_img
 
 # Gradio interface
-def get_samples():
-    sample_list = [
-        {
-            "image": "assets/oranges.jpg",
-            "text": "A very close up view of this item. It is placed on a wooden table. The background is a dark room, the TV is on, and the screen is showing a cooking show. With text on the screen that reads 'Omini Control!'",
-        },
-        {
-            "image": "assets/penguin.jpg",
-            "text": "On Christmas evening, on a crowded sidewalk, this item sits on the road, covered in snow and wearing a Christmas hat, holding a sign that reads 'Omini Control!'",
-        },
-        {
-            "image": "assets/rc_car.jpg",
-            "text": "A film style shot. On the moon, this item drives across the moon surface. The background is that Earth looms large in the foreground.",
-        },
-        {
-            "image": "assets/clock.jpg",
-            "text": "In a Bauhaus style room, this item is placed on a shiny glass table, with a vase of flowers next to it. In the afternoon sun, the shadows of the blinds are cast on the wall.",
-        },
-    ]
-    return [[Image.open(sample["image"]), sample["text"]] for sample in sample_list]
 
 demo = gr.Interface(
     fn=process_image_and_text,
@@ -324,7 +304,6 @@ demo = gr.Interface(
     ],
     outputs=gr.Image(type="pil"),
     title="OminiControl / Subject driven generation",
-    examples=get_samples(),
 )
 
 if __name__ == "__main__":
