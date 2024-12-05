@@ -1,13 +1,13 @@
-# `transformers-gradio`
+# `diffusers-gradio`
 
-is a Python package that makes it easy for developers to create machine learning apps powered by 🤗 Transformers models using Gradio.
+is a Python package that makes it easy for developers to create machine learning apps powered by 🤗 Diffusers models using Gradio.
 
 # Installation
 
-You can install `transformers-gradio` directly using pip:
+You can install `diffusers-gradio` directly using pip:
 
 ```bash
-pip install transformers-gradio
+pip install diffusers-gradio
 ```
 
 # Basic Usage
@@ -16,15 +16,15 @@ First, you'll need a Hugging Face model. Then in a Python file, write:
 
 ```python
 import gradio as gr
-import transformers_gradio
+import diffusers_gradio
 
 gr.load(
     name='organization/model-name',  # Hugging Face model ID
-    src=transformers_gradio.registry,
+    src=diffusers_gradio.registry,
 ).launch()
 ```
 
-Run the Python file, and you should see a Gradio chat interface connected to your local 🤗 Transformers model!
+Run the Python file, and you should see a Gradio chat interface connected to your local 🤗 Diffusers model!
 
 # Customization 
 

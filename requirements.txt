@@ -1,6 +1,6 @@
-git+https://github.com/huggingface/transformers.git
-gradio>=5.5.0
-bitsandbytes
-optimum
-accelerate
-Pillow
+transformers
+diffusers
+peft
+opencv-python
+protobuf
+sentencepiece

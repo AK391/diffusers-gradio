@@ -1,7 +1,7 @@
 import gradio as gr
-import transformers_gradio
+import diffusers_gradio
 
 gr.load(
-    name='bartowski/Marco-o1-GGUF',
-    src=transformers_gradio.registry,
+    name='Yuanshi/OminiControl',
+    src=diffusers_gradio.registry,
 ).launch()
